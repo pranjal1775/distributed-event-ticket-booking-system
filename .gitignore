@@ -1,0 +1,22 @@
+# Local environment files (keep the checked-in template only)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+node_modules/
+.vite/
+*.log
+.DS_Store
+Thumbs.db
+.pytest_cache/
+.coverage
+htmlcov/

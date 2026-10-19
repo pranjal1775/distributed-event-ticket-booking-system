@@ -1,0 +1,186 @@
+DISTRIBUTED EVENT TICKET BOOKING SYSTEM — ARCHITECTURE DIAGRAM
+================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT LAYER                                   │
+│                                                                             │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │  React / Vite SPA  (port 3000)                                       │  │
+│   │  • Events listing + search                                           │  │
+│   │  • Seat picker (row/col grid)                                        │  │
+│   │  • Booking summary panel                                             │  │
+│   │  • My Bookings / Notifications                                       │  │
+│   │  • JWT stored in localStorage, injected via Axios interceptor        │  │
+│   └──────────────────────────────┬───────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                   │  HTTP/REST
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             GATEWAY LAYER                                   │
+│                                                                             │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │  API Gateway  (port 8000)                                            │  │
+│   │                                                                      │  │
+│   │  ┌─────────────────────┐   ┌──────────────────────────────────────┐  │  │
+│   │  │  Rate Limiter       │   │  JWT Validator                       │  │  │
+│   │  │  Sliding window     │   │  • Validates signature + expiry      │  │  │
+│   │  │  per client IP      │   │  • Public routes bypass (login,      │  │  │
+│   │  │  60 req / 60s       │   │    register, GET /events/*)          │  │  │
+│   │  │  → HTTP 429         │   │  • Protected routes → HTTP 401       │  │  │
+│   │  └─────────────────────┘   └──────────────────────────────────────┘  │  │
+│   │                                                                      │  │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
+│   │  │  Reverse Proxy  (httpx AsyncClient — connection pooling)     │   │  │
+│   │  │  Forwards method + headers + body + query params             │   │  │
+│   │  │  ConnectError → 503   TimeoutException → 504                 │   │  │
+│   │  └──────────────────────────────────────────────────────────────┘   │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+└──────┬──────────────┬──────────────────┬──────────────────┬─────────────────┘
+       │              │                  │                  │
+       ▼              ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SERVICE LAYER                                     │
+│                                                                             │
+│  ┌────────────┐  ┌────────────┐  ┌──────────────────────┐  ┌────────────┐  │
+│  │User Service│  │Event Svc   │  │  Booking Service     │  │Notif. Svc  │  │
+│  │  :8001     │  │  :8002     │  │  :8003  (×3 pods)    │  │  :8004     │  │
+│  │            │  │            │  │                      │  │            │  │
+│  │• Register  │  │• List evts │  │• SELECT FOR UPDATE   │  │• Receive   │  │
+│  │• Login     │  │• Get event │  │  (seat locking)      │  │  internal  │  │
+│  │• JWT issue │  │• Create    │  │• Payment simulator   │  │  POST from │  │
+│  │• Get user  │  │  event +   │  │• Lamport clock       │  │  booking   │  │
+│  │• List users│  │  seats     │  │  (threading.Lock)    │  │  service   │  │
+│  │  (admin)   │  │• Seat avail│  │• Fire-and-forget     │  │• GET /my   │  │
+│  │            │  │• Status    │  │  notification        │  │  (JWT)     │  │
+│  │JWT: issue  │  │  update    │  │                      │  │            │  │
+│  │  + verify  │  │            │  │  Pod 1  Pod 2  Pod 3 │  │Internal    │  │
+│  │            │  │JWT: verify │  │  ┌───┐  ┌───┐  ┌───┐ │  │token auth  │  │
+│  │            │  │  (admin    │  │  │clk│  │clk│  │clk│ │  │(not JWT)   │  │
+│  │            │  │   check)   │  │  └───┘  └───┘  └───┘ │  │            │  │
+│  └────────────┘  └────────────┘  └──────────────────────┘  └────────────┘  │
+│       │                │                    │                    │          │
+│       └────────────────┴────────────────────┴────────────────────┘          │
+│                                    │                                        │
+└────────────────────────────────────┼────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DATA LAYER                                       │
+│                                                                             │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │  PostgreSQL  :5432                                                   │  │
+│   │                                                                      │  │
+│   │  ┌──────────┐  ┌──────────────────┐  ┌────────────────────────────┐ │  │
+│   │  │  users   │  │ events │  seats  │  │ bookings │ booking_items  │ │  │
+│   │  │          │  │        │         │  │          │                │ │  │
+│   │  │id        │  │id      │id       │  │id        │id              │ │  │
+│   │  │email     │  │name    │event_id │  │user_id   │booking_id      │ │  │
+│   │  │hashed_pw │  │date    │label    │  │event_id  │seat_id ◄──────┐│ │  │
+│   │  │full_name │  │venue   │status   │  │amount    │seat_label     ││ │  │
+│   │  │role      │  │price   │         │  │pay_status│               ││ │  │
+│   │  │          │  │avail_  │UNIQUE   │  │bk_status │UNIQUE(seat_id)││ │  │
+│   │  │          │  │seats   │(event_id│  │logical_  │← double-book  ││ │  │
+│   │  │          │  │        │,label)  │  │  clock   │  guard        ││ │  │
+│   │  └──────────┘  └────────┴─────────┘  └──────────┴───────────────┘│ │  │
+│   │                                                                    │ │  │
+│   │  ┌──────────────────────────────────────────────────────────────┐ │ │  │
+│   │  │  notifications                                               │ │ │  │
+│   │  │  id │ user_id │ booking_id │ message │ logical_clock         │ │ │  │
+│   │  └──────────────────────────────────────────────────────────────┘ │ │  │
+│   └────────────────────────────────────────────────────────────────────┘ │  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+BOOKING REQUEST FLOW (Happy Path)
+==================================
+
+  Browser                Gateway           Booking Svc          PostgreSQL
+     │                      │                   │                    │
+     │  POST /api/bookings/  │                   │                    │
+     │──────────────────────►│                   │                    │
+     │                       │ validate JWT       │                    │
+     │                       │◄──────────────────│                    │
+     │                       │ proxy request      │                    │
+     │                       │──────────────────►│                    │
+     │                       │                   │ BEGIN TRANSACTION  │
+     │                       │                   │───────────────────►│
+     │                       │                   │ SELECT event       │
+     │                       │                   │◄───────────────────│
+     │                       │                   │ SELECT FOR UPDATE  │
+     │                       │                   │  seats ORDER BY id │
+     │                       │                   │◄───────────────────│
+     │                       │                   │ validate status    │
+     │                       │                   │ process_payment()  │
+     │                       │                   │ INSERT booking     │
+     │                       │                   │───────────────────►│
+     │                       │                   │ INSERT items       │
+     │                       │                   │───────────────────►│
+     │                       │                   │ UPDATE seats       │
+     │                       │                   │───────────────────►│
+     │                       │                   │ UPDATE avail_seats │
+     │                       │                   │───────────────────►│
+     │                       │                   │ COMMIT             │
+     │                       │                   │───────────────────►│
+     │                       │                   │ POST /notifications│
+     │                       │                   │──────────────────► Notif Svc
+     │                       │  201 Confirmed    │  (fire-and-forget) │
+     │                       │◄──────────────────│                    │
+     │  201 Confirmed        │                   │                    │
+     │◄──────────────────────│                   │                    │
+
+
+KUBERNETES DEPLOYMENT (Horizontal Scaling Demo)
+================================================
+
+  kubectl / minikube
+        │
+        ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Namespace: ticket-booking                              │
+  │                                                         │
+  │  ConfigMap: app-config    Secret: app-secrets           │
+  │  (non-sensitive env vars) (JWT_SECRET, DB password,     │
+  │                            INTERNAL_SERVICE_TOKEN)      │
+  │                                                         │
+  │  ┌──────────────────────────────────────────────────┐   │
+  │  │  booking-service  Deployment  (replicas: 3)      │   │
+  │  │                                                  │   │
+  │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │   │
+  │  │  │  Pod 1   │  │  Pod 2   │  │  Pod 3   │       │   │
+  │  │  │ clock=0  │  │ clock=0  │  │ clock=0  │       │   │
+  │  │  └────┬─────┘  └────┬─────┘  └────┬─────┘       │   │
+  │  │       └─────────────┴─────────────┘              │   │
+  │  │                     │                            │   │
+  │  │         ClusterIP Service :8003                  │   │
+  │  │         (round-robin load balancing)             │   │
+  │  └──────────────────────────────────────────────────┘   │
+  │                                                         │
+  │  api-gateway  NodePort :30000  (external access)        │
+  │  frontend     NodePort :30001  (external access)        │
+  │  postgres     PVC 1Gi  ClusterIP                        │
+  └─────────────────────────────────────────────────────────┘
+
+
+CONCURRENCY CONTROL DETAIL
+============================
+
+  Thread 1 (User A)              Thread 2 (User B)
+  wants seat S1                  wants seat S1
+        │                               │
+        │  BEGIN TXN                    │  BEGIN TXN
+        │──────────────────────────────►│  (waits for lock)
+        │                               │
+        │  SELECT * FROM seats          │
+        │  WHERE id=S1                  │
+        │  FOR UPDATE  ◄── lock held    │
+        │                               │
+        │  status = 'available' ✓       │
+        │  INSERT booking               │
+        │  UPDATE seat → 'booked'       │
+        │  COMMIT  ──── lock released   │
+        │                               │  SELECT * FROM seats
+        │                               │  WHERE id=S1 FOR UPDATE
+        │                               │  status = 'booked' ✗
+        │                               │  ROLLBACK → HTTP 409
+        │                               │
+  HTTP 201 Confirmed           HTTP 409 Conflict

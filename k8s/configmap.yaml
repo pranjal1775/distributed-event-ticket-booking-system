@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: ticket-booking
+data:
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "ticketdb"
+  POSTGRES_USER: "ticketuser"
+  JWT_ALGORITHM: "HS256"
+  JWT_EXPIRY_MINUTES: "60"
+  USER_SERVICE_URL: "http://user-service:8001"
+  EVENT_SERVICE_URL: "http://event-service:8002"
+  BOOKING_SERVICE_URL: "http://booking-service:8003"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8004"
+  PAYMENT_MODE: "random"
+  RATE_LIMIT: "60"
+  RATE_WINDOW: "60"
